@@ -4,13 +4,13 @@
     This is a historical document based on the [original paper for vLLM](https://arxiv.org/abs/2309.06180).
     It no longer describes the code used in vLLM today.
 
-Currently, vLLM utilizes its own implementation of a multi-head query
-attention kernel (`csrc/attention/attention_kernels.cu`).
-This kernel is designed to be compatible with
-vLLM's paged KV caches, where the key and value cache are stored in
-separate blocks (note that this block concept differs from the GPU
-thread block. So in a later document, I will refer to vLLM paged
-attention block as "block", while refer to GPU thread block as
+At the time this document was written, vLLM used its own implementation
+of a multi-head query attention kernel
+(`csrc/attention/attention_kernels.cu`). This kernel was designed to be
+compatible with vLLM's paged KV caches, where the key and value cache
+are stored in separate blocks (note that this block concept differs
+from the GPU thread block. So in a later document, I will refer to vLLM
+paged attention block as "block", while refer to GPU thread block as
 "thread block").
 
 To achieve high performance, this kernel relies on a specially
@@ -18,9 +18,9 @@ designed memory layout and access method, specifically when threads
 read data from global memory to shared memory. The purpose of this
 document is to provide a high-level explanation of the kernel
 implementation step by step, aiding those who wish to learn about the
-vLLM multi-head query attention kernel. After going through this
-document, users will likely have a better understanding and feel easier
-to follow the actual implementation.
+vLLM multi-head query attention kernel from the original paper era.
+After going through this document, users will likely have a better
+understanding of that historical implementation.
 
 Please note that this document may not cover all details, such as how
 to calculate the correct index for the corresponding data or the dot
