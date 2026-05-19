@@ -145,6 +145,15 @@ class CacheConfig:
     num_cpu_blocks: int | None = field(default=None, init=False)
     """The number of blocks to allocate for CPU memory."""
 
+    # Set after KV cache initialization. These two values are per-DP-engine
+    # cache_config_info fields; they are not summed like num_gpu_blocks.
+    # Use group-aware capacity since num_gpu_blocks * block_size can be wrong
+    # for hybrid models where requests occupy multiple KV cache groups.
+    kv_cache_size_tokens: int | None = field(default=None, init=False)
+    """Per-DP-engine KV cache capacity in tokens (group-aware)."""
+    kv_cache_max_concurrency: float | None = field(default=None, init=False)
+    """Per-DP-engine maximum concurrency at max_model_len tokens."""
+
     kv_sharing_fast_prefill: bool = False
     """This feature is work in progress and no prefill optimization takes place
     with this flag enabled currently.
@@ -203,6 +212,8 @@ class CacheConfig:
             # Post-init/derived counters
             "num_gpu_blocks",
             "num_cpu_blocks",
+            "kv_cache_size_tokens",
+            "kv_cache_max_concurrency",
             # WIP feature toggle not impacting compiled graph shape
             "kv_sharing_fast_prefill",
         }

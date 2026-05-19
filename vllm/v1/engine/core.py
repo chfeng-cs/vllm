@@ -42,6 +42,7 @@ from vllm.utils.system_utils import decorate_logs, set_process_title
 from vllm.v1.core.kv_cache_utils import (
     BlockHash,
     generate_scheduler_kv_cache_config,
+    get_kv_cache_capacity,
     get_kv_cache_configs,
     get_request_block_hasher,
     init_none_hash,
@@ -276,6 +277,11 @@ class EngineCore:
             vllm_config.cache_config.block_size = min(
                 g.kv_cache_spec.block_size for g in kv_cache_groups
             )
+            num_tokens, max_concurrency = get_kv_cache_capacity(
+                vllm_config, scheduler_kv_cache_config
+            )
+            vllm_config.cache_config.kv_cache_size_tokens = num_tokens
+            vllm_config.cache_config.kv_cache_max_concurrency = max_concurrency
 
         vllm_config.validate_block_size()
 
@@ -1437,6 +1443,12 @@ class EngineCoreProc(EngineCore):
                 max_model_len=self.vllm_config.model_config.max_model_len,
                 num_gpu_blocks=self.vllm_config.cache_config.num_gpu_blocks or 0,
                 dp_stats_address=self.frontend_stats_publish_address,
+                kv_cache_size_tokens=(
+                    self.vllm_config.cache_config.kv_cache_size_tokens
+                ),
+                kv_cache_max_concurrency=(
+                    self.vllm_config.cache_config.kv_cache_max_concurrency
+                ),
             )
             ready_payload = msgspec.msgpack.encode(ready_response)
             for input_socket in input_sockets:

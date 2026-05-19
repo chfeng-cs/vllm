@@ -75,6 +75,11 @@ class EngineCoreReadyResponse:
     max_model_len: int
     num_gpu_blocks: int
     dp_stats_address: str | None
+    # Group-aware KV cache capacity; None for encoder-only / attention-free
+    # models. The frontend Prometheus logger exposes these through
+    # vllm:cache_config_info.
+    kv_cache_size_tokens: int | None = None
+    kv_cache_max_concurrency: float | None = None
 
 
 class EngineCoreRequest(
