@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import enum
 import os
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -218,6 +219,11 @@ class LMCacheMPRequestTracker:
 
     cache_salt: str = ""
 
+    # Timing
+    t_on_new_request: float = 0.0  # set in on_new_request (early_prefetch only)
+    t_scheduled: float = 0.0  # set when first scheduled (update_state_after_alloc)
+    t_kv_ready: float = 0.0  # set when KV fully loaded (state → READY)
+
     def __init__(self, request: "Request"):
         self.request_id = request.request_id
         self.cache_salt: str = request.cache_salt or ""
@@ -228,6 +234,9 @@ class LMCacheMPRequestTracker:
         self.num_vllm_hit_blocks = 0
         self.num_lmcache_hit_blocks = 0
         self.state = LMCacheMPRequestState.PREFETCHING
+        self.t_on_new_request = 0.0
+        self.t_scheduled = 0.0
+        self.t_kv_ready = 0.0
 
     ####
     # Check the state of the request
@@ -807,9 +816,12 @@ class LMCacheMPConnectorUpstream(KVConnectorBase_V1):
         return need_to_load, need_to_load > 0
 
     def on_new_request(self, request: "Request") -> None:
-        if not self._eager_prefetch or request.resumable:
+        if request.resumable:
             return
         tracker = self._get_or_create_request_tracker(request)
+        tracker.t_on_new_request = time.perf_counter()
+        if not self._eager_prefetch:
+            return
         self.scheduler_adapter.maybe_submit_lookup_request(
             request.request_id,
             token_ids=list(request.all_token_ids),
@@ -843,6 +855,9 @@ class LMCacheMPConnectorUpstream(KVConnectorBase_V1):
         # We must only append the NEW blocks beyond what's already tracked
         # to avoid duplication, which would corrupt the store path's block indexing.
         tracker = self._get_request_tracker(request.request_id)
+        # Record first schedule time
+        if tracker.t_scheduled == 0.0:
+            tracker.t_scheduled = time.perf_counter()
         block_ids = reformat_block_ids(blocks.get_block_ids())
 
         # Only append blocks beyond what's already tracked
@@ -860,6 +875,29 @@ class LMCacheMPConnectorUpstream(KVConnectorBase_V1):
                 LMCacheMPRequestState.WAITING_FOR_LOAD
                 if condition
                 else LMCacheMPRequestState.READY
+            )
+            # Record when KV is ready and log timing breakdown
+            tracker.t_kv_ready = time.perf_counter()
+            tokens = tracker.num_lmcache_hit_blocks * self.vllm_block_size
+            schedule_to_ready_ms = (
+                (tracker.t_kv_ready - tracker.t_scheduled) * 1000
+                if tracker.t_scheduled > 0
+                else float("nan")
+            )
+            enqueue_to_ready_ms = (
+                (tracker.t_kv_ready - tracker.t_on_new_request) * 1000
+                if tracker.t_on_new_request > 0
+                else float("nan")
+            )
+            logger.info(
+                "[KV_TIMING] req=%s tokens=%d needs_retrieve=%s | "
+                "schedule→kv_ready: %.1f ms | "
+                "on_new_request→kv_ready: %.1f ms",
+                request.request_id[:8],
+                tokens,
+                condition,
+                schedule_to_ready_ms,
+                enqueue_to_ready_ms,
             )
             # Clean up lookup future in scheduler adapter
             self.scheduler_adapter.cleanup_lookup_result(request.request_id)
@@ -1058,6 +1096,25 @@ class LMCacheMPConnectorUpstream(KVConnectorBase_V1):
             if r_metadata is not None:
                 metadata.add_request_metadata(r_metadata)
             request_tracker.state = LMCacheMPRequestState.READY
+            # Record KV fully loaded time (WAITING_FOR_LOAD → READY path)
+            request_tracker.t_kv_ready = time.perf_counter()
+            schedule_to_ready_ms = (
+                (request_tracker.t_kv_ready - request_tracker.t_scheduled) * 1000
+                if request_tracker.t_scheduled > 0
+                else float("nan")
+            )
+            enqueue_to_ready_ms = (
+                (request_tracker.t_kv_ready - request_tracker.t_on_new_request) * 1000
+                if request_tracker.t_on_new_request > 0
+                else float("nan")
+            )
+            logger.info(
+                "[KV_TIMING] req=%s | schedule→kv_ready: %.1f ms | "
+                "on_new_request→kv_ready: %.1f ms",
+                request_tracker.request_id[:8],
+                schedule_to_ready_ms,
+                enqueue_to_ready_ms,
+            )
 
     def _process_new_requests(
         self,
